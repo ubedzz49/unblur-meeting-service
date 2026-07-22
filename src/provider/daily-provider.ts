@@ -1,5 +1,3 @@
-import crypto from "node:crypto";
-
 export interface CreateRoomInput {
   name: string;
   expiresAt: Date;
@@ -48,8 +46,12 @@ export class DailyVideoProvider implements VideoRoomProvider {
       throw new Error(`daily create room failed: ${res.status} ${body}`);
     }
 
+    // Daily's DELETE /v1/rooms/:name endpoint takes the room's *name*, not the `id` field its
+    // own create response returns -- storing `json.id` here meant every endRoom() call 404'd
+    // ("room '<id>' not found") since that id was never a valid name. We already know the name
+    // (we just sent it), so use that as providerRoomId instead of Daily's own id.
     const json = (await res.json()) as { id: string; url: string };
-    return { providerRoomId: json.id, joinUrl: json.url };
+    return { providerRoomId: input.name, joinUrl: json.url };
   }
 
   async endRoom(providerRoomId: string): Promise<void> {
@@ -77,7 +79,9 @@ export class FakeVideoProvider implements VideoRoomProvider {
 
   async createRoom(input: CreateRoomInput): Promise<CreateRoomResult> {
     this.calls.createRoom.push(input);
-    const providerRoomId = crypto.randomUUID();
+    // providerRoomId is the room *name* here too, matching the real DailyVideoProvider --
+    // see the comment there on why this must be the name, not Daily's own internal `id` field
+    const providerRoomId = input.name;
     const joinUrl = `https://fake.daily.co/${input.name}`;
     this.rooms.set(providerRoomId, input.name);
     return { providerRoomId, joinUrl };
