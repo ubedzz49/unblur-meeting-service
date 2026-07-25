@@ -356,10 +356,22 @@ describe("POST /webhooks/daily", () => {
       .digest("base64");
   }
 
-  it("401s when DAILY_WEBHOOK_SECRET is not configured", async () => {
+  it("200s unverified when DAILY_WEBHOOK_SECRET is not configured yet (bootstrap window for registration)", async () => {
     const app = buildApp(new FakeVideoProvider(), INTERNAL_TOKEN, undefined);
     const res = await app.inject({ method: "POST", url: "/webhooks/daily", payload: {} });
-    expect(res.statusCode).toBe(401);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("still starts recording unverified when DAILY_WEBHOOK_SECRET is not configured yet", async () => {
+    const provider = new FakeVideoProvider();
+    const app = buildApp(provider, INTERNAL_TOKEN, undefined);
+    const res = await app.inject({
+      method: "POST",
+      url: "/webhooks/daily",
+      payload: { type: "participant.joined", payload: { room_name: "room-1" } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(provider.calls.startRecording).toEqual(["room-1"]);
   });
 
   it("401s a request with no signature headers", async () => {
