@@ -236,3 +236,107 @@ describe("POST /internal/rooms/:id/end", () => {
     expect(res.statusCode).toBe(401);
   });
 });
+
+describe("POST /internal/rooms/:id/tokens", () => {
+  const USER_ID = "22222222-2222-2222-2222-222222222222";
+
+  function mintToken(
+    app: ReturnType<typeof buildApp>,
+    providerRoomId: string,
+    body: Record<string, unknown> = { userId: USER_ID, joinUrl: "https://fake.daily.co/room-1", expiresAt: new Date(Date.now() + 60_000).toISOString() },
+  ) {
+    return app.inject({
+      method: "POST",
+      url: `/internal/rooms/${providerRoomId}/tokens`,
+      headers: { "x-internal-service-token": INTERNAL_TOKEN },
+      payload: body,
+    });
+  }
+
+  it("401s with no internal token", async () => {
+    const { app } = newApp();
+    const res = await app.inject({ method: "POST", url: "/internal/rooms/room-1/tokens", payload: {} });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("rejects a missing userId", async () => {
+    const { app } = newApp();
+    const res = await mintToken(app, "room-1", { joinUrl: "https://fake.daily.co/room-1", expiresAt: new Date().toISOString() });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("rejects a missing joinUrl", async () => {
+    const { app } = newApp();
+    const res = await mintToken(app, "room-1", { userId: USER_ID, expiresAt: new Date().toISOString() });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("rejects an invalid expiresAt", async () => {
+    const { app } = newApp();
+    const res = await mintToken(app, "room-1", { userId: USER_ID, joinUrl: "https://fake.daily.co/room-1", expiresAt: "not-a-date" });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("returns a joinUrl tagged for the given user and records the call on the provider", async () => {
+    const { app, provider } = newApp();
+    const res = await mintToken(app, "room-1");
+    expect(res.statusCode).toBe(200);
+    expect(res.json().joinUrl).toBe("https://fake.daily.co/room-1?t=fake-token-22222222-2222-2222-2222-222222222222");
+    expect(provider.calls.mintJoinToken).toEqual([{ providerRoomId: "room-1", userId: USER_ID }]);
+  });
+
+  it("returns 502 (not the raw provider error) when the provider throws", async () => {
+    const provider = new FakeVideoProvider();
+    provider.mintJoinToken = async () => {
+      throw new Error("daily mint meeting token failed: 500 secret-key-xyz");
+    };
+    const { app } = newApp(provider);
+    const res = await mintToken(app, "room-1");
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: "couldn't mint a join link, try again" });
+  });
+});
+
+describe("GET /internal/rooms/:id/attendance", () => {
+  const USER_ID = "33333333-3333-3333-3333-333333333333";
+
+  it("401s with no internal token", async () => {
+    const { app } = newApp();
+    const res = await app.inject({ method: "GET", url: `/internal/rooms/room-1/attendance?userId=${USER_ID}` });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("rejects a missing userId", async () => {
+    const { app } = newApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/internal/rooms/room-1/attendance",
+      headers: { "x-internal-service-token": INTERNAL_TOKEN },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("returns 0 attended seconds when the provider has none recorded", async () => {
+    const { app } = newApp();
+    const res = await app.inject({
+      method: "GET",
+      url: `/internal/rooms/room-1/attendance?userId=${USER_ID}`,
+      headers: { "x-internal-service-token": INTERNAL_TOKEN },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ providerRoomId: "room-1", userId: USER_ID, attendedSeconds: 0 });
+  });
+
+  it("returns the attended seconds the provider reports for that user", async () => {
+    const provider = new FakeVideoProvider();
+    provider.attendedSeconds.set(`room-1:${USER_ID}`, 1800);
+    const { app } = newApp(provider);
+    const res = await app.inject({
+      method: "GET",
+      url: `/internal/rooms/room-1/attendance?userId=${USER_ID}`,
+      headers: { "x-internal-service-token": INTERNAL_TOKEN },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().attendedSeconds).toBe(1800);
+  });
+});

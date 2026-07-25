@@ -105,5 +105,49 @@ export function buildApp(
     return reply.send({ ok: true });
   });
 
+  // mints a join link tagged with a specific user id -- the shared/anonymous room joinUrl gives
+  // Daily no way to attribute a session to a participant, which the attendance check below needs
+  app.post<{ Params: { id: string }; Body: { userId?: string; joinUrl?: string; expiresAt?: string } }>(
+    "/internal/rooms/:id/tokens",
+    async (request, reply) => {
+      const { userId, joinUrl, expiresAt } = request.body ?? {};
+      if (typeof userId !== "string" || userId.length === 0) {
+        return reply.code(400).send({ error: "userId is required" });
+      }
+      if (typeof joinUrl !== "string" || joinUrl.length === 0) {
+        return reply.code(400).send({ error: "joinUrl is required" });
+      }
+      const parsedExpiresAt = new Date(expiresAt ?? "");
+      if (Number.isNaN(parsedExpiresAt.getTime())) {
+        return reply.code(400).send({ error: "expiresAt must be a valid ISO date string" });
+      }
+
+      let personalJoinUrl: string;
+      try {
+        personalJoinUrl = await videoRoomProvider.mintJoinToken(request.params.id, joinUrl, userId, parsedExpiresAt);
+      } catch (err) {
+        request.log.error({ err, providerRoomId: request.params.id, userId }, "failed to mint join token");
+        return reply.code(502).send({ error: "couldn't mint a join link, try again" });
+      }
+
+      return reply.send({ joinUrl: personalJoinUrl });
+    },
+  );
+
+  // sums a user's real time in the room, in seconds -- used at booking-completion time to decide
+  // whether the resolver actually attended enough of the session to be paid
+  app.get<{ Params: { id: string }; Querystring: { userId?: string } }>(
+    "/internal/rooms/:id/attendance",
+    async (request, reply) => {
+      const { userId } = request.query ?? {};
+      if (typeof userId !== "string" || userId.length === 0) {
+        return reply.code(400).send({ error: "userId is required" });
+      }
+
+      const attendedSeconds = await videoRoomProvider.getAttendedSeconds(request.params.id, userId);
+      return reply.send({ providerRoomId: request.params.id, userId, attendedSeconds });
+    },
+  );
+
   return app;
 }

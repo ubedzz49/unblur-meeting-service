@@ -76,4 +76,61 @@ describe("DailyVideoProvider", () => {
     const provider = new DailyVideoProvider();
     await expect(provider.createRoom({ name: "x", expiresAt: new Date() })).rejects.toThrow(/DAILY_API_KEY/);
   });
+
+  it("mintJoinToken appends the token to the room's own base joinUrl", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "abc123" }),
+    }) as unknown as typeof fetch;
+
+    const provider = new DailyVideoProvider();
+    const url = await provider.mintJoinToken(
+      "my-room-name",
+      "https://unblur.daily.co/my-room-name",
+      "user-1",
+      new Date(Date.now() + 60_000),
+    );
+
+    expect(url).toBe("https://unblur.daily.co/my-room-name?t=abc123");
+  });
+
+  it("mintJoinToken throws with Daily's error body on a non-ok response", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => '{"error":"invalid-request"}',
+    }) as unknown as typeof fetch;
+
+    const provider = new DailyVideoProvider();
+    await expect(
+      provider.mintJoinToken("room", "https://unblur.daily.co/room", "user-1", new Date()),
+    ).rejects.toThrow(/daily mint meeting token failed: 400/);
+  });
+
+  it("getAttendedSeconds sums this user's duration across every participant session in the room", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [
+          { participants: [{ user_id: "user-1", duration: 600 }, { user_id: "user-2", duration: 900 }] },
+          { participants: [{ user_id: "user-1", duration: 300 }] },
+        ],
+      }),
+    }) as unknown as typeof fetch;
+
+    const provider = new DailyVideoProvider();
+    const seconds = await provider.getAttendedSeconds("room", "user-1");
+    expect(seconds).toBe(900);
+  });
+
+  it("getAttendedSeconds throws with Daily's error body on a non-ok response", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      text: async () => '{"error":"not-found"}',
+    }) as unknown as typeof fetch;
+
+    const provider = new DailyVideoProvider();
+    await expect(provider.getAttendedSeconds("room", "user-1")).rejects.toThrow(/daily get meetings failed: 404/);
+  });
 });
