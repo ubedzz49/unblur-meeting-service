@@ -19,6 +19,12 @@ export interface VideoRoomProvider {
   mintJoinToken(providerRoomId: string, baseJoinUrl: string, userId: string, expiresAt: Date): Promise<string>;
   // sums this user's total session duration in the room, across every join/leave, in seconds
   getAttendedSeconds(providerRoomId: string, userId: string): Promise<number>;
+  // starts cloud recording for a room that already has a call in progress -- enable_recording on
+  // the room only makes recording *available* (shows a manual record button in Daily's UI), it
+  // doesn't auto-start it, so this is called from the participant.joined webhook to make
+  // recording actually automatic. Idempotent in practice: Daily errors if already recording,
+  // which the caller treats as a no-op, not a failure.
+  startRecording(providerRoomId: string): Promise<void>;
 }
 
 const DAILY_API_BASE = "https://api.daily.co/v1";
@@ -133,6 +139,32 @@ export class DailyVideoProvider implements VideoRoomProvider {
       .filter((p) => p.user_id === userId)
       .reduce((total, p) => total + p.duration, 0);
   }
+
+  async startRecording(providerRoomId: string): Promise<void> {
+    const apiKey = process.env.DAILY_API_KEY;
+    if (!apiKey) {
+      throw new Error("DAILY_API_KEY is not set");
+    }
+
+    const res = await fetch(`${DAILY_API_BASE}/rooms/${encodeURIComponent(providerRoomId)}/recordings/start`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      // Daily returns a real error if a room is already recording -- callers treat that as a
+      // harmless no-op (a second participant joining shouldn't fail), not a real problem
+      if (body.includes("already") || body.includes("recording-in-progress")) {
+        return;
+      }
+      throw new Error(`daily start recording failed: ${res.status} ${body}`);
+    }
+  }
 }
 
 // deterministic in-memory fake for tests -- no network call, no real credential needed
@@ -141,7 +173,8 @@ export class FakeVideoProvider implements VideoRoomProvider {
     createRoom: CreateRoomInput[];
     endRoom: string[];
     mintJoinToken: { providerRoomId: string; userId: string }[];
-  } = { createRoom: [], endRoom: [], mintJoinToken: [] };
+    startRecording: string[];
+  } = { createRoom: [], endRoom: [], mintJoinToken: [], startRecording: [] };
   private rooms = new Map<string, string>();
   // test seam: set per (providerRoomId, userId) attendance the fake should report
   attendedSeconds = new Map<string, number>();
@@ -168,5 +201,9 @@ export class FakeVideoProvider implements VideoRoomProvider {
 
   async getAttendedSeconds(providerRoomId: string, userId: string): Promise<number> {
     return this.attendedSeconds.get(`${providerRoomId}:${userId}`) ?? 0;
+  }
+
+  async startRecording(providerRoomId: string): Promise<void> {
+    this.calls.startRecording.push(providerRoomId);
   }
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import crypto from "node:crypto";
 import { buildApp } from "./app.js";
 import { FakeVideoProvider } from "./provider/daily-provider.js";
 
@@ -338,5 +339,130 @@ describe("GET /internal/rooms/:id/attendance", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().attendedSeconds).toBe(1800);
+  });
+});
+
+describe("POST /webhooks/daily", () => {
+  const WEBHOOK_SECRET = Buffer.from("test-webhook-secret").toString("base64");
+
+  function newAppWithWebhook(provider = new FakeVideoProvider()) {
+    return { app: buildApp(provider, INTERNAL_TOKEN, WEBHOOK_SECRET), provider };
+  }
+
+  function sign(secret: string, timestamp: string, rawBody: string): string {
+    return crypto
+      .createHmac("sha256", Buffer.from(secret, "base64"))
+      .update(`${timestamp}.${rawBody}`)
+      .digest("base64");
+  }
+
+  it("401s when DAILY_WEBHOOK_SECRET is not configured", async () => {
+    const app = buildApp(new FakeVideoProvider(), INTERNAL_TOKEN, undefined);
+    const res = await app.inject({ method: "POST", url: "/webhooks/daily", payload: {} });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("401s a request with no signature headers", async () => {
+    const { app } = newAppWithWebhook();
+    const res = await app.inject({ method: "POST", url: "/webhooks/daily", payload: {} });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("401s a request with a wrong signature", async () => {
+    const { app } = newAppWithWebhook();
+    const res = await app.inject({
+      method: "POST",
+      url: "/webhooks/daily",
+      headers: { "x-webhook-timestamp": "123", "x-webhook-signature": "wrong" },
+      payload: { type: "participant.joined", payload: { room_name: "room-1" } },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("200s and starts recording for a correctly-signed participant.joined event", async () => {
+    const { app, provider } = newAppWithWebhook();
+    const timestamp = "1700000000";
+    const rawBody = JSON.stringify({ type: "participant.joined", payload: { room_name: "room-1" } });
+    const signature = sign(WEBHOOK_SECRET, timestamp, rawBody);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/webhooks/daily",
+      headers: {
+        "x-webhook-timestamp": timestamp,
+        "x-webhook-signature": signature,
+        "content-type": "application/json",
+      },
+      payload: rawBody,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(provider.calls.startRecording).toEqual(["room-1"]);
+  });
+
+  it("200s and does nothing for an event type it doesn't care about", async () => {
+    const { app, provider } = newAppWithWebhook();
+    const timestamp = "1700000000";
+    const rawBody = JSON.stringify({ type: "participant.left", payload: { room_name: "room-1" } });
+    const signature = sign(WEBHOOK_SECRET, timestamp, rawBody);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/webhooks/daily",
+      headers: {
+        "x-webhook-timestamp": timestamp,
+        "x-webhook-signature": signature,
+        "content-type": "application/json",
+      },
+      payload: rawBody,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(provider.calls.startRecording).toEqual([]);
+  });
+
+  it("still 200s even if starting the recording throws (best-effort, never fails the webhook)", async () => {
+    const provider = new FakeVideoProvider();
+    provider.startRecording = async () => {
+      throw new Error("daily start recording failed: 500");
+    };
+    const { app } = newAppWithWebhook(provider);
+    const timestamp = "1700000000";
+    const rawBody = JSON.stringify({ type: "participant.joined", payload: { room_name: "room-1" } });
+    const signature = sign(WEBHOOK_SECRET, timestamp, rawBody);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/webhooks/daily",
+      headers: {
+        "x-webhook-timestamp": timestamp,
+        "x-webhook-signature": signature,
+        "content-type": "application/json",
+      },
+      payload: rawBody,
+    });
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("does not require the internal service token", async () => {
+    const { app } = newAppWithWebhook();
+    const timestamp = "1700000000";
+    const rawBody = JSON.stringify({ type: "participant.joined", payload: { room_name: "room-1" } });
+    const signature = sign(WEBHOOK_SECRET, timestamp, rawBody);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/webhooks/daily",
+      headers: {
+        "x-webhook-timestamp": timestamp,
+        "x-webhook-signature": signature,
+        "content-type": "application/json",
+        // deliberately no x-internal-service-token
+      },
+      payload: rawBody,
+    });
+
+    expect(res.statusCode).toBe(200);
   });
 });
