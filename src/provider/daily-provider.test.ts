@@ -148,4 +148,39 @@ describe("DailyVideoProvider", () => {
     const provider = new DailyVideoProvider();
     await expect(provider.getAttendedSeconds("room", "user-1")).rejects.toThrow(/daily get meetings failed: 404/);
   });
+
+  it("startRecording posts to the room's recordings/start endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const provider = new DailyVideoProvider();
+    await provider.startRecording("my-room-name");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.daily.co/v1/rooms/my-room-name/recordings/start",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("startRecording treats an 'already recording' error as a no-op", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => '{"error":"invalid-request-error","info":"room is already recording"}',
+    }) as unknown as typeof fetch;
+
+    const provider = new DailyVideoProvider();
+    await expect(provider.startRecording("my-room-name")).resolves.toBeUndefined();
+  });
+
+  it("startRecording throws on a genuine non-ok response", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      text: async () => '{"error":"not-found"}',
+    }) as unknown as typeof fetch;
+
+    const provider = new DailyVideoProvider();
+    await expect(provider.startRecording("gone-room")).rejects.toThrow(/daily start recording failed: 404/);
+  });
 });

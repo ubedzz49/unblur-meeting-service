@@ -2,6 +2,12 @@ import crypto from "node:crypto";
 import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { FakeVideoProvider, VideoRoomProvider } from "./provider/daily-provider.js";
 
+declare module "fastify" {
+  interface FastifyRequest {
+    rawBody?: string;
+  }
+}
+
 const MAX_DURATION_MINS = 480;
 // scheduled slot end plus a buffer so the call isn't cut off exactly at the booked end time --
 // matches the "expiry = slot end plus buffer" rule from the design doc's security section
@@ -19,6 +25,7 @@ interface CreateRoomBody {
 export function buildApp(
   videoRoomProvider: VideoRoomProvider = new FakeVideoProvider(),
   internalServiceToken: string | undefined = process.env.INTERNAL_SERVICE_TOKEN,
+  dailyWebhookSecret: string | undefined = process.env.DAILY_WEBHOOK_SECRET,
 ): FastifyInstance {
   const app = Fastify({
     logger: process.env.NODE_ENV === "test" ? false : { level: process.env.LOG_LEVEL ?? "info" },
@@ -26,8 +33,11 @@ export function buildApp(
 
   // Fastify's default JSON parser rejects an empty body when Content-Type: application/json is
   // set, even for no-body calls like POST .../end -- real clients send that header
-  // unconditionally, so this bites any no-body call otherwise (see ARCHITECTURE_DECISIONS.md)
-  app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
+  // unconditionally, so this bites any no-body call otherwise (see ARCHITECTURE_DECISIONS.md).
+  // Also stashes the raw string body on the request -- the Daily webhook route below needs it
+  // (not the parsed object) to verify Daily's HMAC signature.
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
+    request.rawBody = body as string;
     if (body === "") {
       done(null, {});
       return;
@@ -42,9 +52,11 @@ export function buildApp(
   app.get("/healthz", async () => ({ status: "ok" }));
 
   // this whole service is internal-only -- no client-facing routes exist here at all, so every
-  // route except /healthz is gated on the shared service token, never a user identity header
+  // route except /healthz and the Daily webhook (verified separately below, by HMAC signature
+  // instead -- Daily can't send our internal service token) is gated on the shared service
+  // token, never a user identity header
   app.addHook("preHandler", async (request: FastifyRequest, reply: FastifyReply) => {
-    if (request.url === "/healthz") return;
+    if (request.url === "/healthz" || request.url.startsWith("/webhooks/")) return;
     const token = request.headers["x-internal-service-token"];
     if (!token || token !== internalServiceToken) {
       request.log.warn("rejected internal request with missing/invalid service token");
@@ -148,6 +160,54 @@ export function buildApp(
       return reply.send({ providerRoomId: request.params.id, userId, attendedSeconds });
     },
   );
+
+  // Daily calls this the moment a participant joins a room -- enable_recording on room creation
+  // only makes recording *available* (a manual button in Daily's UI), it doesn't auto-start it,
+  // so this is what actually makes "every session is recorded" true without anyone clicking
+  // anything. Verified by Daily's own HMAC signature (never trust an unverified webhook), not
+  // the internal service token -- Daily has no way to send that.
+  app.post("/webhooks/daily", async (request, reply) => {
+    if (!dailyWebhookSecret) {
+      request.log.error("received a Daily webhook but DAILY_WEBHOOK_SECRET is not configured, rejecting");
+      return reply.code(401).send({ error: "webhook not configured" });
+    }
+
+    const timestamp = request.headers["x-webhook-timestamp"];
+    const signature = request.headers["x-webhook-signature"];
+    if (typeof timestamp !== "string" || typeof signature !== "string") {
+      request.log.warn("rejected daily webhook: missing signature headers");
+      return reply.code(401).send({ error: "missing signature headers" });
+    }
+
+    const expected = crypto
+      .createHmac("sha256", Buffer.from(dailyWebhookSecret, "base64"))
+      .update(`${timestamp}.${request.rawBody ?? ""}`)
+      .digest("base64");
+
+    if (signature !== expected) {
+      request.log.warn("rejected daily webhook: signature mismatch");
+      return reply.code(401).send({ error: "invalid signature" });
+    }
+
+    const event = request.body as { type?: string; payload?: Record<string, unknown> };
+    const roomName =
+      (event.payload?.room_name as string | undefined) ??
+      (event.payload?.room as string | undefined) ??
+      (event.payload?.roomName as string | undefined);
+
+    if (event.type === "participant.joined" && roomName) {
+      try {
+        await videoRoomProvider.startRecording(roomName);
+        request.log.info({ roomName }, "started recording on participant join");
+      } catch (err) {
+        // best-effort -- a recording that fails to start shouldn't affect the call itself, and
+        // there's no user-facing action to retry from here anyway
+        request.log.warn({ err, roomName }, "failed to start recording, ignoring");
+      }
+    }
+
+    return reply.code(200).send({ ok: true });
+  });
 
   return app;
 }

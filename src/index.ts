@@ -16,6 +16,13 @@ if (!process.env.DAILY_API_KEY) {
   process.exit(1);
 }
 
+// not fail-closed like the two above -- auto-recording is an enhancement (the room and its
+// manual record button still work without it), not something the whole service depends on to
+// function. The /webhooks/daily route itself rejects every request while this is unset.
+if (!process.env.DAILY_WEBHOOK_SECRET) {
+  logger.warn("DAILY_WEBHOOK_SECRET is not set, incoming Daily webhooks will be rejected");
+}
+
 const app = buildApp(new DailyVideoProvider());
 
 app
