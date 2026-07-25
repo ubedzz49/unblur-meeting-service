@@ -40,8 +40,10 @@ export class DailyVideoProvider implements VideoRoomProvider {
         name: input.name,
         properties: {
           exp: Math.floor(input.expiresAt.getTime() / 1000),
-          // recording config (Recording & Moderation Service, Version 5) goes here later --
-          // e.g. enable_recording: "cloud" -- deliberately not wired up yet
+          // Version 5: every resolution session is recorded automatically (cloud recording,
+          // no manual start/stop) -- Recording Service's retention sweep deletes the recording
+          // 15 minutes after the session ends, it's never kept longer than that
+          enable_recording: "cloud",
         },
       }),
     });

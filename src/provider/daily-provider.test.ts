@@ -34,6 +34,21 @@ describe("DailyVideoProvider", () => {
     expect(result.joinUrl).toBe("https://unblur.daily.co/my-room-name");
   });
 
+  it("enables cloud recording on every room (Version 5 -- every session is recorded automatically)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "x", url: "https://unblur.daily.co/my-room-name" }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const provider = new DailyVideoProvider();
+    await provider.createRoom({ name: "my-room-name", expiresAt: new Date(Date.now() + 60000) });
+
+    const [, options] = fetchMock.mock.calls[0];
+    const body = JSON.parse(options.body as string);
+    expect(body.properties.enable_recording).toBe("cloud");
+  });
+
   it("endRoom calls DELETE on the room name (the providerRoomId createRoom returned)", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     global.fetch = fetchMock as unknown as typeof fetch;
