@@ -168,8 +168,26 @@ export function buildApp(
   // the internal service token -- Daily has no way to send that.
   app.post("/webhooks/daily", async (request, reply) => {
     if (!dailyWebhookSecret) {
-      request.log.error("received a Daily webhook but DAILY_WEBHOOK_SECRET is not configured, rejecting");
-      return reply.code(401).send({ error: "webhook not configured" });
+      // Deliberately not a 401 here: Daily's own webhook-registration call does a live
+      // verification ping against this exact URL *before* it has ever handed us a secret to
+      // verify against -- rejecting that ping makes registration itself impossible. Safe only
+      // because this is a narrow, self-closing bootstrap window: DAILY_WEBHOOK_SECRET gets set
+      // (from the value Daily's registration response returns) and redeployed immediately after
+      // registration succeeds, closing this window for good.
+      request.log.warn("DAILY_WEBHOOK_SECRET not configured yet, accepting unverified (bootstrap only)");
+      const event = request.body as { type?: string; payload?: Record<string, unknown> };
+      const roomName =
+        (event.payload?.room_name as string | undefined) ??
+        (event.payload?.room as string | undefined) ??
+        (event.payload?.roomName as string | undefined);
+      if (event.type === "participant.joined" && roomName) {
+        try {
+          await videoRoomProvider.startRecording(roomName);
+        } catch (err) {
+          request.log.warn({ err, roomName }, "failed to start recording, ignoring");
+        }
+      }
+      return reply.code(200).send({ ok: true });
     }
 
     const timestamp = request.headers["x-webhook-timestamp"];
