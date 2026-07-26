@@ -50,6 +50,13 @@ export class DailyVideoProvider implements VideoRoomProvider {
           // no manual start/stop) -- Recording Service's retention sweep deletes the recording
           // 15 minutes after the session ends, it's never kept longer than that
           enable_recording: "cloud",
+          // Version 6: Daily's own transcription, stored alongside the recording -- AI Notes
+          // Service reads this via GET /transcript instead of doing speech-to-text itself.
+          // Same 15-minute retention/deletion window as the recording is not enforced here
+          // (Daily doesn't tie transcript lifetime to it); AI Notes Service is expected to fetch
+          // and store the transcript text promptly after session end, same reasoning as the
+          // recording retention sweep's own comment about generating before the raw file is gone.
+          enable_transcription_storage: true,
         },
       }),
     });
