@@ -13,8 +13,8 @@ const MAX_DURATION_MINS = 480;
 // matches the "expiry = slot end plus buffer" rule from the design doc's security section
 const EXPIRY_BUFFER_MINS = 15;
 
-type RoomType = "resolution";
-const VALID_ROOM_TYPES: RoomType[] = ["resolution"];
+type RoomType = "resolution" | "seminar" | "gd";
+const VALID_ROOM_TYPES: RoomType[] = ["resolution", "seminar", "gd"];
 
 interface CreateRoomBody {
   type?: string;
