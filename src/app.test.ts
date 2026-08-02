@@ -486,3 +486,44 @@ describe("POST /webhooks/daily", () => {
     expect(res.statusCode).toBe(200);
   });
 });
+
+describe("log level management", () => {
+  it("rejects without a valid internal token", async () => {
+    const { app } = newApp();
+    const res = await app.inject({ method: "GET", url: "/internal/log-level" });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("reads and changes the runtime log level, then resets it", async () => {
+    const { app } = newApp();
+    const get = await app.inject({ method: "GET", url: "/internal/log-level", headers: { "x-internal-service-token": INTERNAL_TOKEN } });
+    expect(get.json().level).toBe("info");
+
+    const set = await app.inject({
+      method: "POST",
+      url: "/internal/log-level",
+      headers: { "x-internal-service-token": INTERNAL_TOKEN },
+      payload: { level: "debug" },
+    });
+    expect(set.statusCode).toBe(200);
+    expect(set.json().level).toBe("debug");
+
+    await app.inject({
+      method: "POST",
+      url: "/internal/log-level",
+      headers: { "x-internal-service-token": INTERNAL_TOKEN },
+      payload: { level: "info" },
+    });
+  });
+
+  it("rejects an unrecognized level", async () => {
+    const { app } = newApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/log-level",
+      headers: { "x-internal-service-token": INTERNAL_TOKEN },
+      payload: { level: "verbose" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
