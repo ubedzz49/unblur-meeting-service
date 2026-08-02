@@ -60,11 +60,19 @@ describe("internal auth", () => {
 });
 
 describe("POST /internal/rooms", () => {
-  it("rejects a type other than 'resolution'", async () => {
+  it("rejects an unrecognized type", async () => {
     const { app } = newApp();
-    const res = await createRoom(app, createBody({ type: "seminar" }));
+    const res = await createRoom(app, createBody({ type: "not-a-real-type" }));
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toMatch(/type must be one of/);
+  });
+
+  it("accepts 'seminar' and 'gd' room types", async () => {
+    const { app } = newApp();
+    const seminarRes = await createRoom(app, createBody({ type: "seminar" }));
+    expect(seminarRes.statusCode).toBe(201);
+    const gdRes = await createRoom(app, createBody({ type: "gd", referenceId: "ref-2" }));
+    expect(gdRes.statusCode).toBe(201);
   });
 
   it("rejects a missing type", async () => {
