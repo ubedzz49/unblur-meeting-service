@@ -59,7 +59,7 @@ export function buildApp(
   // instead -- Daily can't send our internal service token) is gated on the shared service
   // token, never a user identity header
   app.addHook("preHandler", async (request: FastifyRequest, reply: FastifyReply) => {
-    if (request.url === "/healthz" || request.url.startsWith("/webhooks/")) return;
+    if (request.url.split("?")[0] === "/healthz" || request.url.startsWith("/webhooks/")) return;
     const token = request.headers["x-internal-service-token"];
     if (!token || token !== internalServiceToken) {
       request.log.warn("rejected internal request with missing/invalid service token");
