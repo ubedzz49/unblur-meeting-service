@@ -49,6 +49,26 @@ describe("DailyVideoProvider", () => {
     expect(body.properties.enable_recording).toBe("cloud");
   });
 
+  // regression: without an explicit "public" privacy, a room falls back to the org dashboard's
+  // own default, which isn't guaranteed to be public -- and with the prejoin UI left on, a user
+  // who already clicked our own "Join session" button then has to click *again* inside Daily's
+  // own camera/mic-check screen, which reads as the whole page being stuck, not a real step.
+  it("creates every room public with the prejoin screen disabled", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "x", url: "https://unblur.daily.co/my-room-name" }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const provider = new DailyVideoProvider();
+    await provider.createRoom({ name: "my-room-name", expiresAt: new Date(Date.now() + 60000) });
+
+    const [, options] = fetchMock.mock.calls[0];
+    const body = JSON.parse(options.body as string);
+    expect(body.properties.privacy).toBe("public");
+    expect(body.properties.enable_prejoin_ui).toBe(false);
+  });
+
   it("endRoom calls DELETE on the room name (the providerRoomId createRoom returned)", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     global.fetch = fetchMock as unknown as typeof fetch;
