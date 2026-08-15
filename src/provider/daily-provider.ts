@@ -44,12 +44,15 @@ export class DailyVideoProvider implements VideoRoomProvider {
       },
       body: JSON.stringify({
         name: input.name,
+        // "privacy" is a top-level field on Daily's room object, not a "properties" sub-field --
+        // nesting it under properties (as an earlier version of this did) 400s with "invalid
+        // property name 'privacy'", which broke every single accept in production. Explicit,
+        // not relying on the org's dashboard default -- every participant here already went
+        // through our own auth/accept flow before getting a joinUrl at all, so there's nothing
+        // extra Daily's own privacy gate needs to add.
+        privacy: "public",
         properties: {
           exp: Math.floor(input.expiresAt.getTime() / 1000),
-          // explicit, not relying on the org's dashboard default -- every participant here
-          // already went through our own auth/accept flow before getting a joinUrl at all, so
-          // there's nothing extra Daily's own privacy gate needs to add
-          privacy: "public",
           // skip Daily's own camera/mic "hair check" screen -- the user already clicked our own
           // "Join session" button to get here, so a second manual "Join meeting" click buried
           // inside the embedded iframe just reads as the page being stuck, not a deliberate step
