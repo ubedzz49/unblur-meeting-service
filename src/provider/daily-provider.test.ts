@@ -65,7 +65,11 @@ describe("DailyVideoProvider", () => {
 
     const [, options] = fetchMock.mock.calls[0];
     const body = JSON.parse(options.body as string);
-    expect(body.properties.privacy).toBe("public");
+    // regression: privacy is a top-level field on Daily's room object, not a "properties"
+    // sub-field -- nesting it under properties 400s with "invalid property name 'privacy'"
+    // (confirmed against the real Daily API, not just this mock), which broke every accept in
+    // production until this test actually asserted the real shape instead of a guessed one.
+    expect(body.privacy).toBe("public");
     expect(body.properties.enable_prejoin_ui).toBe(false);
   });
 
